@@ -141,6 +141,8 @@ def main():
             model_name,
             torch_dtype=config.torch_dtype,
             device_map=config.device
+            trust_remote_code=True,
+            use_safetensors=True 
         )
         model.eval()
 
