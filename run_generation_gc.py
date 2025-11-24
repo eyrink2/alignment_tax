@@ -216,6 +216,13 @@ def main():
     upload_to_gcs(config.output_file, config.gcs_bucket, "final_results")  # Fixed: generic name
     logging.info("🎉 All done!")
 
+    # auto shut down the VM
+    logging.info("Shutting down VM in 60 seconds...")
+    import subprocess
+    import time
+    time.sleep(60)  # Wait 60 seconds to ensure upload completes
+    subprocess.run(["sudo", "shutdown", "-h", "now"])
+
 
 if __name__ == "__main__":
     main()
