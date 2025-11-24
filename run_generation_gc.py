@@ -9,7 +9,7 @@ from datasets import load_dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from tqdm import tqdm
 import logging
-from google.cloud import storage  # <-- for Cloud Storage uploads
+from google.cloud import storage
 
 # --- Configuration Block ---
 
@@ -22,7 +22,7 @@ class GenerationConfig:
         "allenai/OLMo-2-1124-7B-DPO",
     ])
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
-    torch_dtype = torch.bfloat16  # Use torch.float16 if GPU doesn't support bfloat16
+    torch_dtype = torch.bfloat16
 
     # Dataset and sampling settings
     num_prompts_per_probe: int = 100
@@ -38,29 +38,43 @@ class GenerationConfig:
     # Output and logging settings
     output_file: str = f"generation_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     save_interval: int = 10
-    gcs_bucket: str = "aligntment_tax_generations"  # <-- your actual bucket name
+    gcs_bucket: str = "aligntment_tax_generations"  # Your actual bucket name
 
 
 # --- Utility Functions ---
 
 def setup_logging():
     """Sets up basic logging."""
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    logging.basicConfig(
+        level=logging.INFO, 
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler('generation.log'),
+            logging.StreamHandler()
+        ]
+    )
 
 
-def upload_to_gcs(local_path: str, bucket_name: str, model_name: str):
-    """Uploads a local file to Google Cloud Storage under a subfolder for each model."""
-    try:
-        client = storage.Client()
-        bucket = client.bucket(bucket_name)
-        # Use the model name as a subfolder (sanitize slashes)
-        safe_model_name = model_name.replace("/", "_")
-        blob_name = f"{safe_model_name}/{os.path.basename(local_path)}"
-        blob = bucket.blob(blob_name)
-        blob.upload_from_filename(local_path)
-        logging.info(f"✅ Uploaded {local_path} to gs://{bucket_name}/{blob_name}")
-    except Exception as e:
-        logging.error(f"❌ Failed to upload {local_path} to GCS: {e}")
+def upload_to_gcs(local_path: str, bucket_name: str, model_name: str, max_retries: int = 3):
+    """Uploads a local file to Google Cloud Storage with retry logic."""
+    for attempt in range(max_retries):
+        try:
+            client = storage.Client()
+            bucket = client.bucket(bucket_name)
+            safe_model_name = model_name.replace("/", "_")
+            blob_name = f"{safe_model_name}/{os.path.basename(local_path)}"
+            blob = bucket.blob(blob_name)
+            blob.upload_from_filename(local_path)
+            logging.info(f"✅ Uploaded {local_path} to gs://{bucket_name}/{blob_name}")
+            return True
+        except Exception as e:
+            logging.error(f"❌ Upload attempt {attempt + 1}/{max_retries} failed: {e}")
+            if attempt < max_retries - 1:
+                import time
+                time.sleep(5)  # Wait 5 seconds before retry
+            else:
+                logging.error(f"❌ Failed to upload {local_path} after {max_retries} attempts")
+                return False
 
 
 def parse_hh_prompt(example):
@@ -127,6 +141,10 @@ def main():
     setup_logging()
     config = GenerationConfig()
     logging.info(f"Starting generation with config: {config}")
+    logging.info(f"Device: {config.device}")
+    logging.info(f"GPU Available: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        logging.info(f"GPU Name: {torch.cuda.get_device_name(0)}")
 
     probes = prepare_datasets(config)
 
@@ -142,7 +160,7 @@ def main():
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
             torch_dtype=config.torch_dtype,
-            device_map=config.device
+            device_map="auto"  # Fixed: was config.device
         )
         model.eval()
 
@@ -151,6 +169,7 @@ def main():
 
             for i, prompt in enumerate(tqdm(prompts, desc=f"Generating for {probe_name}")):
                 if any(d['model_name'] == model_name and d['probe_name'] == probe_name and d['prompt'] == prompt for d in all_results):
+                    logging.info(f"Skipping already generated prompt {i+1}/{len(prompts)}")
                     continue
 
                 try:
@@ -167,7 +186,8 @@ def main():
                         "model_name": model_name,
                         "probe_name": probe_name,
                         "prompt": prompt,
-                        "responses": ["ERROR: Generation failed."]
+                        "responses": ["ERROR: Generation failed."],
+                        "error": str(e)
                     })
 
                 # Periodically save and upload
@@ -176,6 +196,12 @@ def main():
                     with open(config.output_file, 'w') as f:
                         json.dump(all_results, f, indent=2)
                     upload_to_gcs(config.output_file, config.gcs_bucket, model_name)
+
+        # Save after each model completes
+        logging.info(f"Saving results after completing model: {model_name}")
+        with open(config.output_file, 'w') as f:
+            json.dump(all_results, f, indent=2)
+        upload_to_gcs(config.output_file, config.gcs_bucket, model_name)
 
         # Clean up before next model
         del model
@@ -187,7 +213,8 @@ def main():
     logging.info(f"Generation complete. Saving final results to {config.output_file}.")
     with open(config.output_file, 'w') as f:
         json.dump(all_results, f, indent=2)
-    upload_to_gcs(config.output_file, config.gcs_bucket, model_name)
+    upload_to_gcs(config.output_file, config.gcs_bucket, "final_results")  # Fixed: generic name
+    logging.info("🎉 All done!")
 
 
 if __name__ == "__main__":
