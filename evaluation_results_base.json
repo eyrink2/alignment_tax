@@ -1,0 +1,27 @@
+{
+  "config": {
+    "input_file": "base_generation.json",
+    "timestamp": "2025-11-28T17:16:07.744555",
+    "code_version": "v4.1-2class-simple"
+  },
+  "diversity_metrics": {
+    "allenai/OLMo-2-1124-7B": {
+      "self_bleu_avg": 0.08663096940779873,
+      "self_bleu_std": 0.0651029923568899,
+      "distinct1_avg": 0.259524293568874,
+      "distinct1_std": 0.13231218038507966,
+      "distinct2_avg": 0.4975790720013393,
+      "distinct2_std": 0.19701587818328883,
+      "num_prompts": 100
+    }
+  },
+  "safety_metrics": {
+    "allenai/OLMo-2-1124-7B": {
+      "refusal_rate": 0.124,
+      "compliance_rate": 0.876,
+      "total_responses": 500,
+      "refusal_count": 62,
+      "compliance_count": 438
+    }
+  }
+}
